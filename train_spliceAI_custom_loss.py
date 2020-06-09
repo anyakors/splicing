@@ -80,9 +80,9 @@ def celoss_math(labels_flat, pred):
     pred = tf.transpose(tf.keras.backend.log(pred))
     labels_flat = tf.cast(labels_flat, pred.dtype)
     # labels_b.shape[0] = N (batch size), labels_b.shape[1] = 5000
-    labels_flat = tf.reshape(labels_flat, [labels_flat.shape[0], labels_flat.shape[1]])
+    #labels_flat = tf.reshape(labels_flat, [labels_flat.shape[0], labels_flat.shape[1]])
     # reshaping with dims 1, 2 because we alrd transposed it so it has dims [5000, N] now
-    pred = tf.reshape(pred, [pred.shape[1], pred.shape[2]])
+    #pred = tf.reshape(pred, [pred.shape[1], pred.shape[2]])
 
     return tf.math.negative(tf.math.reduce_sum(tf.linalg.diag(tf.keras.backend.dot(labels_flat, pred))))
 
@@ -97,18 +97,18 @@ def custom_crossentropy_loss(y_true, y_pred):
     eps = tf.constant(1e-15, dtype=tf.float32)
     eps_ = tf.constant(1e-15, dtype=tf.float32)
 
-    labels_b = tf.boolean_mask(y_true, mask_b, axis=2)
+    labels_b = tf.squeeze(tf.boolean_mask(y_true, mask_b, axis=2))
     n_b = tf.math.count_nonzero(labels_b)
-    labels_a = tf.boolean_mask(y_true, mask_a, axis=2)
+    labels_a = tf.squeeze(tf.boolean_mask(y_true, mask_a, axis=2))
     n_a = tf.math.count_nonzero(labels_a)
-    labels_d = tf.boolean_mask(y_true, mask_d, axis=2)
+    labels_d = tf.squeeze(tf.boolean_mask(y_true, mask_d, axis=2))
     n_d = tf.math.count_nonzero(labels_d)
 
     y_pred = tf.keras.backend.clip(y_pred, eps, eps_)
 
-    pred_b = tf.boolean_mask(y_pred, mask_b, axis=2)
-    pred_a = tf.boolean_mask(y_pred, mask_a, axis=2)
-    pred_d = tf.boolean_mask(y_pred, mask_d, axis=2)
+    pred_b = tf.squeeze(tf.boolean_mask(y_pred, mask_b, axis=2))
+    pred_a = tf.squeeze(tf.boolean_mask(y_pred, mask_a, axis=2))
+    pred_d = tf.squeeze(tf.boolean_mask(y_pred, mask_d, axis=2))
 
     s_b = celoss_math(labels_b, pred_b)
     s_b = tf.math.divide(s_b, tf.cast(n_b, s_b.dtype))
