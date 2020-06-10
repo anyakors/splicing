@@ -23,11 +23,15 @@ print('eagerly?', tf.executing_eagerly())
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import multilabel_confusion_matrix
 from sklearn.metrics import roc_auc_score, accuracy_score
 from sklearn.utils import class_weight
 from sklearn.metrics import log_loss
+from sklearn.metrics import precision_recall_curve
+from sklearn.metrics import plot_precision_recall_curve
 
 import numpy as np
+import matplotlib.pyplot as plt
 import os
 
 def hot_encode_seq(let):
@@ -68,35 +72,40 @@ def lr_schedule(epoch):
 
 
 # TRAINING PARAMETERS
-batch_size = 12
+#batch_size = 12
+batch_size = 128
 num_classes = 3
 epochs = 10
 data_augmentation = False
 
-
 def celoss_math(labels_flat, pred):
     # mathematical operations to get crossentropy loss from two batch inputs: y_true and y_pred
+    # multiplying y_true (labels_flat) by y_pred; i try to avoid indexing and looping so using dot product 
+    # for multiplication, but then only the diagonal elements will be meaningful -> summing them up 
 
     pred = tf.transpose(tf.keras.backend.log(pred))
     labels_flat = tf.cast(labels_flat, pred.dtype)
-    # labels_b.shape[0] = N (batch size), labels_b.shape[1] = 5000
-    #labels_flat = tf.reshape(labels_flat, [labels_flat.shape[0], labels_flat.shape[1]])
-    # reshaping with dims 1, 2 because we alrd transposed it so it has dims [5000, N] now
-    #pred = tf.reshape(pred, [pred.shape[1], pred.shape[2]])
 
     return tf.math.negative(tf.math.reduce_sum(tf.linalg.diag(tf.keras.backend.dot(labels_flat, pred))))
 
 
-@tf.function 
+#@tf.function 
 def custom_crossentropy_loss(y_true, y_pred):
+    # this function calculates loss from y_true labels and y_pred predictions for splicing sites;
+    # because the splicing sites are much less abundant than background "states", we'd like to balance the loss
+    # by calculating it separately for splicing sites and background sequence and summing them up afterwards,
+    # normalized by respective counts of sites.
 
     mask_b = np.array([True, False, False])
     mask_a = np.array([False, True, False])
     mask_d = np.array([False, False, True])
 
-    eps = tf.constant(1e-15, dtype=tf.float32)
-    eps_ = tf.constant(1e-15, dtype=tf.float32)
+    # constants for clipping
+    #eps = tf.constant(1e-15, dtype=tf.float32)
+    #eps_ = tf.constant(1e-15, dtype=tf.float32)
 
+    # applying boolean mask to extract the vectors with only blank, donor, acceptor labels 
+    # and "squeezing" one redundant axis to get for instance [5000, 3] instead of [5000, 3, 1]
     labels_b = tf.squeeze(tf.boolean_mask(y_true, mask_b, axis=2))
     n_b = tf.math.count_nonzero(labels_b)
     labels_a = tf.squeeze(tf.boolean_mask(y_true, mask_a, axis=2))
@@ -104,8 +113,10 @@ def custom_crossentropy_loss(y_true, y_pred):
     labels_d = tf.squeeze(tf.boolean_mask(y_true, mask_d, axis=2))
     n_d = tf.math.count_nonzero(labels_d)
 
-    y_pred = tf.keras.backend.clip(y_pred, eps, eps_)
+    # clip the predicted values so we never have to calc log of 0
+    y_pred = tf.keras.backend.clip(y_pred, 1e-15, 1-1e-15)
 
+    # applying boolean mask to extract the vectors with only blank, donor, acceptor predictions
     pred_b = tf.squeeze(tf.boolean_mask(y_pred, mask_b, axis=2))
     pred_a = tf.squeeze(tf.boolean_mask(y_pred, mask_a, axis=2))
     pred_d = tf.squeeze(tf.boolean_mask(y_pred, mask_d, axis=2))
@@ -299,8 +310,8 @@ class DataGenerator(keras.utils.Sequence):
 #transcripts_ = np.loadtxt('/Users/iamqoqao/workspace/splicing/model/principal_transcript/data/transcripts_chunks_chr20', dtype='str', delimiter='\t')
 #labels_ = np.loadtxt('/Users/iamqoqao/workspace/splicing/model/principal_transcript/data/labels_chunks_chr20', dtype='str', delimiter='\t')
 
-transcripts_ = np.loadtxt('./transcripts_chunks_chr1', dtype='str', delimiter='\t', max_rows=100)
-labels_ = np.loadtxt('./labels_chunks_chr1', dtype='str', delimiter='\t', max_rows=100)
+transcripts_ = np.loadtxt('./transcripts_chunks_chr1', dtype='str', delimiter='\t', max_rows=100000)
+labels_ = np.loadtxt('./labels_chunks_chr1', dtype='str', delimiter='\t', max_rows=100000)
 
 #transcripts_ = transcripts_[0:100]
 #labels_ = labels_[0:100]
@@ -360,27 +371,39 @@ model = spliceAI_model(input_shape=input_shape)
 
 model.compile(loss=custom_crossentropy_loss,
               #optimizer='adam',
-              optimizer=Adam(learning_rate=lr_schedule(0)),
+              optimizer=Adam(learning_rate=lr_schedule(0), clipvalue=0.5),
+              #optimizer=Adam(learning_rate=0.1),
               metrics=['accuracy'])
 
 print(model.summary())
 
-training_generator = DataGenerator(partition['train'], samples_dict, labels_dict, **params)
-validation_generator = DataGenerator(partition['validation'], samples_dict, labels_dict, **params)
+#training_generator = DataGenerator(partition['train'], samples_dict, labels_dict, **params)
+#validation_generator = DataGenerator(partition['validation'], samples_dict, labels_dict, **params)
 
 #plot_model(model, show_shapes=True, show_layer_names=True, to_file='model_spliceAI2k_flat.png')
 
-#history = model.fit(x_train, y_train, batch_size=batch_size, epochs=epochs, callbacks=[lr_scheduler, metrics], validation_data=(x_test, y_test), shuffle=True)
+history = model.fit(x_train, y_train, batch_size=batch_size, epochs=epochs, callbacks=[lr_scheduler], validation_data=(x_test, y_test), shuffle=True)
 
-model.fit_generator(generator=training_generator,
-                    validation_data=validation_generator,
-                    use_multiprocessing=False,
-                    steps_per_epoch=len(samples_dict) // batch_size)
-                    #workers=4)
+#model.fit_generator(generator=training_generator,
+#                    validation_data=validation_generator,
+#                    use_multiprocessing=False,
+#                    steps_per_epoch=len(samples_dict) // batch_size)
+#                    #workers=4)
 
-model.save('./model_spliceAI2k_weighted_1')
+model.save('./model_spliceAI2k_custom_celoss')
 
 scores = model.evaluate(x_test, y_test, verbose=1)
 
 print('Test loss:', scores[0])
 print('Test accuracy:', scores[1])
+
+y_pred = model.predict(x_test)
+print("y_pred.shape:", np.shape(y_pred))
+print('y_pred[0]:', y_pred[0])
+print('y_pred[0,:,1]:', y_pred[0, :, 1])
+
+print(classification_report(y_test.argmax(axis=1),
+    y_pred.argmax(axis=1), target_names=['Blank', 'Donor', 'Acceptor']))
+
+#disp = plot_precision_recall_curve(model, x_test, y_test)
+#plt.savefig('precision_recall_custom_celoss.png', format='png')
